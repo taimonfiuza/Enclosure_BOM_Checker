@@ -1,0 +1,862 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style><title>Enclosure BOM Checker</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: phone first, one column (photo, verdict, parts table, settings); from 900px the photo
+   takes the left column and the BOM check sits beside it. Look: an equipment nameplate on grey
+   enclosure plastic; part numbers set in mono like the labels on the parts themselves. */
+:root {
+  --bg: #e9edf1;
+  --panel: #ffffff;
+  --ink: #16202a;
+  --muted: #586572;
+  --line: #d2d9e0;
+  --accent: #1d5bb8;
+  --accent-ink: #ffffff;
+  --plate: #1b232c;
+  --plate-ink: #eef2f6;
+  --ok: #18804a;
+  --ok-bg: #e2f3e9;
+  --miss: #c22d2d;
+  --miss-bg: #fbe4e2;
+  --extra: #9a5c00;
+  --extra-bg: #fcefd7;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --font-body: "Barlow", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f141a; --panel: #18202a; --ink: #e5ebf1; --muted: #93a1af; --line: #2a3440;
+    --accent: #5d9cff; --accent-ink: #08111f; --plate: #232d39; --plate-ink: #eef2f6;
+    --ok: #4cc27f; --ok-bg: #143022; --miss: #ff6d64; --miss-bg: #3b1918;
+    --extra: #f0a93b; --extra-bg: #392812; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f141a; --panel: #18202a; --ink: #e5ebf1; --muted: #93a1af; --line: #2a3440;
+  --accent: #5d9cff; --accent-ink: #08111f; --plate: #232d39; --plate-ink: #eef2f6;
+  --ok: #4cc27f; --ok-bg: #143022; --miss: #ff6d64; --miss-bg: #3b1918;
+  --extra: #f0a93b; --extra-bg: #392812; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.45 var(--font-body); }
+.wrap {
+  max-width: 1180px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+button, input { font: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* Nameplate header */
+.plate { background: var(--plate); color: var(--plate-ink); }
+.plate-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; padding-block: 14px; }
+.eyebrow { margin: 0; font: 600 12px/1 var(--font-display); letter-spacing: .14em; text-transform: uppercase; opacity: .7; }
+h1 { margin: 4px 0 0; font: 700 28px/1 var(--font-display); letter-spacing: .04em; text-transform: uppercase; text-wrap: balance; }
+.status { display: inline-flex; align-items: center; gap: 8px; margin: 0; font: 500 13px/1.2 var(--font-mono); }
+.status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--extra); flex: none; }
+.status[data-state="ready"] .dot { background: var(--ok); }
+.status[data-state="error"] .dot { background: var(--miss); }
+.status[data-state="loading"] .dot { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+/* Layout */
+.layout { display: grid; gap: 20px; padding-block: 20px 32px; }
+@media (min-width: 900px) {
+  .layout { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; gap: 28px; }
+}
+.photo-col, .check-col { display: grid; gap: 14px; min-width: 0; }
+
+/* Buttons */
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 48px; padding: 0 20px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); color: var(--ink); font-weight: 600; cursor: pointer; user-select: none;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); flex: 1 1 180px; }
+.btn.small { min-height: 40px; padding: 0 14px; font-size: 14px; }
+.btn svg { width: 20px; height: 20px; }
+
+/* Photo */
+.photo { position: relative; margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.stage { position: relative; }
+.stage canvas, .stage video { display: block; width: 100%; height: auto; max-width: 100%; background: var(--line); }
+.stage #overlay { position: absolute; inset: 0; height: 100%; background: transparent; pointer-events: none; }
+.actions .btn { flex: 1 1 auto; }
+.actions .btn.primary { flex: 1 1 180px; }
+.rec { width: 10px; height: 10px; border-radius: 50%; background: var(--miss); flex: none; }
+.photo figcaption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.photo-name { font: 500 13px/1.3 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; flex: none; }
+.seg button { border: 0; background: transparent; color: var(--muted); padding: 6px 12px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.busy {
+  position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 10px;
+  background: color-mix(in srgb, var(--panel) 72%, transparent); font: 700 20px/1 var(--font-display); letter-spacing: .08em; text-transform: uppercase;
+}
+.spinner { width: 34px; height: 34px; border: 4px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.note { margin: 0; color: var(--muted); font-size: 14px; }
+.note.error { color: var(--miss); }
+
+/* Verdict */
+.verdict { display: grid; gap: 2px; padding: 16px 18px; border-radius: var(--radius); background: var(--ok-bg); border-left: 8px solid var(--ok); }
+.verdict[data-pass="false"] { background: var(--miss-bg); border-left-color: var(--miss); }
+.verdict[data-pass="wait"] { background: var(--panel); border-left-color: var(--line); }
+.verdict[data-pass="wait"] .verdict-word { color: var(--muted); }
+.verdict-word { margin: 0; font: 700 52px/0.95 var(--font-display); letter-spacing: .06em; color: var(--ok); }
+.verdict[data-pass="false"] .verdict-word { color: var(--miss); }
+.verdict-sub { margin: 0; font-weight: 500; font-variant-numeric: tabular-nums; }
+.verdict-src { margin: 0; color: var(--muted); font-size: 13px; }
+
+/* Parts table */
+.table-box { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font: 600 12px/1 var(--font-display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+td.part { font: 500 14px/1.2 var(--font-mono); white-space: nowrap; }
+.swatch { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 2px; vertical-align: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.chip { display: inline-block; padding: 3px 8px; border-radius: 999px; font: 600 12px/1.2 var(--font-body); letter-spacing: .04em; }
+.chip.OK { background: var(--ok-bg); color: var(--ok); }
+.chip.MISSING { background: var(--miss-bg); color: var(--miss); }
+.chip.EXTRA { background: var(--extra-bg); color: var(--extra); }
+
+/* Settings */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 10px; }
+.control label { display: flex; justify-content: space-between; gap: 12px; font-weight: 600; }
+.control output { font: 500 14px/1.4 var(--font-mono); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+details.panel summary { cursor: pointer; font-weight: 600; list-style-position: inside; }
+details.panel summary .bom-file-name { font: 500 14px var(--font-mono); color: var(--muted); }
+.bom-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.bom-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.bom-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.bom-list li:last-child { border-bottom: 0; }
+.bom-list .name { font: 500 14px/1.2 var(--font-mono); min-width: 0; overflow-wrap: anywhere; }
+.bom-list .name small { display: block; font: 400 12px var(--font-body); color: var(--extra); }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: var(--radius); flex: none; }
+.stepper button { width: 38px; height: 36px; border: 0; background: transparent; color: var(--ink); font-size: 20px; cursor: pointer; }
+.stepper span { min-width: 2.2ch; text-align: center; font: 500 15px var(--font-mono); }
+.foot { color: var(--muted); font-size: 13px; padding-block: 0 28px; }
+@media (prefers-reduced-motion: reduce) { .spinner, .status .dot { animation: none; } }
+</style></head><body>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.js"></script>
+
+<header class="plate">
+  <div class="wrap plate-row">
+    <div>
+      <p class="eyebrow">Enclosure Detection</p>
+      <h1>BOM Checker</h1>
+    </div>
+    <p id="status" class="status" data-state="loading" role="status"><span class="dot"></span><span id="status-text">Loading model</span></p>
+  </div>
+</header>
+
+<main class="wrap layout">
+  <section class="photo-col" aria-label="Photo">
+    <div class="actions">
+      <label class="btn primary" for="camera">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        Take photo
+      </label>
+      <label class="btn" for="library">Choose photo</label>
+      <button id="live-start" class="btn" type="button" hidden><span class="rec" aria-hidden="true"></span>Live camera</button>
+      <button id="live-freeze" class="btn primary" type="button" hidden>Freeze result</button>
+      <button id="live-stop" class="btn" type="button" hidden>Stop live</button>
+      <input id="camera" type="file" accept="image/*" capture="environment" hidden>
+      <input id="library" type="file" accept="image/*" hidden>
+    </div>
+    <figure class="photo">
+      <div class="stage">
+        <canvas id="view" width="1200" height="1600" aria-label="Photo with the detected parts outlined"></canvas>
+        <video id="live" playsinline muted hidden></video>
+        <canvas id="overlay" hidden aria-hidden="true"></canvas>
+        <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busy-text">Checking</span></div>
+      </div>
+      <figcaption>
+        <span id="photo-name" class="photo-name">Example photo</span>
+        <span class="seg" role="group" aria-label="Show">
+          <button id="show-result" type="button" aria-pressed="true">Result</button>
+          <button id="show-original" type="button" aria-pressed="false">Original</button>
+        </span>
+      </figcaption>
+    </figure>
+    <p id="photo-note" class="note">Example result: a validation photo of the 4-solenoid box. Take a photo of an enclosure to check it.</p>
+    <p id="live-elsewhere" class="note" hidden>Live camera works in the hosted copy of this page: <a id="live-link" href="#" target="_blank" rel="noopener"></a></p>
+  </section>
+
+  <section class="check-col" aria-label="BOM check">
+    <div id="verdict" class="verdict" data-pass="true">
+      <p id="verdict-word" class="verdict-word">PASS</p>
+      <p id="verdict-sub" class="verdict-sub"></p>
+      <p id="verdict-src" class="verdict-src"></p>
+    </div>
+    <div class="table-box">
+      <table>
+        <thead><tr><th>Part</th><th class="num">Found / Req</th><th>Status</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="panel control">
+      <label for="conf">Minimum confidence <output id="conf-out" for="conf">50%</output></label>
+      <input id="conf" type="range" min="10" max="90" step="5" value="50">
+      <p class="note">Detections below this confidence are ignored. The desktop app uses 50%.</p>
+    </div>
+    <details id="bom-panel" class="panel">
+      <summary>BOM <span id="bom-name" class="bom-file-name">object_list.xlsx</span></summary>
+      <div class="bom-tools">
+        <label class="btn small" for="bom-file">Load BOM from Excel</label>
+        <input id="bom-file" type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+        <button id="bom-reset" class="btn small" type="button">Reset to object_list.xlsx</button>
+      </div>
+      <p id="bom-msg" class="note">Same format as the desktop app: first sheet, columns Object Name and Quantity. Changes here are kept on this device.</p>
+      <ul id="bom-list" class="bom-list"></ul>
+    </details>
+  </section>
+</main>
+<footer class="wrap foot">Model my_model_v2 (YOLO11s, 45 training photos). Photos are checked on this device and are not uploaded.</footer>
+
+<script>
+// Part classes in the model's output order (training/dataset/data.yaml)
+const CLASSES = ['DECAL', 'ENGINE_KILL_RELAY', 'INTERLOCK_RELAY1', 'REEL_IN_RELAY', 'REL1100', 'REL1150',
+  'SOL1000', 'WIRASM_1000', 'WIRASM_1001', 'WIRASM_2000', 'WIRASM_2001', 'WIRE_STRIP'];
+// bom/object_list.xlsx, in sheet order
+const DEFAULT_BOM = { name: 'object_list.xlsx', items: { REL1100: 4, REL1150: 0, WIRE_STRIP: 1, DECAL: 1, WIRASM_1001: 0,
+  WIRASM_2000: 0, WIRASM_2001: 4, WIRASM_1000: 0, INTERLOCK_RELAY1: 0, REEL_IN_RELAY: 0, ENGINE_KILL_RELAY: 0, SOL1000: 1 } };
+// Same box colours as the desktop app (inspection.BBOX_COLORS, converted from BGR)
+const COLORS = ['#5778a4', '#e49444', '#d1615d', '#85b6b2', '#6a9f58', '#e7ca60', '#a87c9f', '#f1a2a9', '#967662', '#b8b0ac'];
+const IOU = 0.7;          // Ultralytics' default NMS threshold, as used by the desktop app
+const MIN_KEEP = 0.10;    // the slider's lowest setting: moving it re-filters these and never re-runs the model
+const MAX_SIDE = 2048;    // photos are scaled down to this before checking (the training photos are 1536 x 2048)
+// ONNX Runtime's engine is published with the page (the CDN serves only scripts to it), and the
+// 38 MB model in three parts because a published file may be at most 15 MB. The parts are plain ONNX
+// bytes; they are named .wasm only because artifacts serve that type unchanged. Sizes drive the progress bar.
+const ENGINE = ['ort/ort-wasm-simd-threaded.wasm', 11246032];
+const MODEL_PARTS = [['model/my_model_v2.onnx.part1.wasm', 12648507], ['model/my_model_v2.onnx.part2.wasm', 12648507],
+  ['model/my_model_v2.onnx.part3.wasm', 12648506]];
+// Example shown before the first photo: IMG_8627 run through this page with my_model_v2.
+// Candidates are [class, confidence, x1, y1, x2, y2] in example.jpg pixels.
+const EXAMPLE = { src: 'example.jpg', name: 'Example: IMG_8627.JPEG', candidates: [[10,0.227,403.2,773.7,623,967.3],[10,0.227,410.5,773.6,624.4,968.7],[0,0.588,173.9,1274,548.2,1326.5],[0,0.762,171.2,1273.7,555,1327.2],[0,0.811,171.8,1273.7,546.7,1327.3],[0,0.783,176.8,1274.1,545.9,1326],[0,0.54,173.3,1273.5,546.6,1328.2],[0,0.702,172.7,1273.6,554.7,1328.3],[0,0.739,170.8,1273.9,546.8,1328.6],[0,0.814,174.2,1274.8,544.4,1327.7],[6,0.897,582.1,243.5,973.1,697.1],[6,0.934,583.1,243,973.1,698.6],[11,0.875,469.3,426.9,722.4,535.5],[11,0.899,468.4,426.9,722.1,535.5],[11,0.907,467.1,427.6,724,535.8],[11,0.885,466.3,427.7,724.3,536.1],[6,0.964,583,240.7,973.9,692.4],[6,0.934,583.7,239.2,973.3,694.4],[11,0.882,469.4,426.2,723.2,536.4],[11,0.893,468.9,427.3,722.2,536.2],[11,0.893,467.3,427.8,724.2,536],[11,0.884,466.3,427.9,723.9,536],[11,0.436,462.3,427.2,724.2,535.8],[10,0.926,434.7,511,722.1,709.5],[10,0.935,437,511,723.7,708.1],[10,0.932,441.9,511.3,721.4,707],[10,0.231,433.2,507.8,721.1,709.9],[10,0.92,434.5,510,722.7,709.2],[10,0.914,435.2,509.9,722.8,708.8],[10,0.889,438.2,509.9,724,708.2],[10,0.31,435.4,507.5,724.7,707.7],[10,0.912,434.3,511,723.4,708],[10,0.913,435.8,509.7,724.4,707.9],[10,0.938,437.1,510.6,725.1,707.5],[4,0.871,343.4,651.4,579.3,853.8],[4,0.905,342.7,651.2,579.8,856.2],[4,0.272,342.4,651.1,579.1,850.7],[4,0.934,580.4,637,826.7,878.3],[4,0.905,579.7,636.7,824.9,879.1],[4,0.91,579,636.4,825.3,878.4],[4,0.9,342.6,651,579,852.6],[4,0.925,342.6,651.3,579.6,849.9],[4,0.915,343.6,651.2,579.4,850.1],[4,0.928,580.8,636.3,825.7,877.7],[4,0.916,579.8,636.4,824.8,877.9],[4,0.931,579.9,634.8,825.7,878.8],[4,0.915,342.2,651,578.8,857.7],[4,0.932,342.5,651,579.7,853.7],[4,0.932,340.6,651,578.9,853.5],[4,0.887,581.4,636.1,827.2,879.5],[4,0.896,580.1,634.8,825.5,879.4],[4,0.929,580.3,634.7,825.7,879],[4,0.786,341.2,650.9,579.6,868.7],[4,0.81,341.8,649.8,581.3,861],[10,0.872,410.6,769.6,630.3,989.4],[10,0.895,536.1,755,770.8,974.9],[10,0.911,536.2,755.7,772.2,975.6],[10,0.417,543.3,754.7,773.6,974.1],[4,0.597,578.5,637.5,825.9,877.7],[10,0.949,404,770.3,630,992.9],[10,0.937,405.7,770.6,630.5,990.6],[10,0.91,537.3,753.8,770.6,974.4],[10,0.944,536.7,754,771.9,974.2],[10,0.937,535.2,754,770.9,974.9],[10,0.907,400.6,773.2,629,994.6],[10,0.938,404.2,771.8,628.2,992.8],[10,0.942,405.7,771.2,629.6,991.6],[10,0.72,409.5,765.1,629,990.6],[10,0.926,537.3,755.1,770,974.7],[10,0.946,537.3,754.4,771.1,974.9],[10,0.938,535.2,755.1,770.8,975.8],[4,0.919,300.5,850.6,540.2,1098.7],[4,0.885,299.4,851.4,540.3,1099],[4,0.682,306.5,847.4,541.9,1097.4],[10,0.94,401.8,771.1,628.1,992.1],[10,0.949,404.4,769.8,629,991.8],[10,0.938,537.5,753.6,770,974.5],[4,0.822,630.5,894,872.9,1133.2],[4,0.93,299.7,851,539.9,1098.7],[4,0.943,297.3,851.5,540.6,1098.9],[4,0.923,299.7,852,540.5,1098.9],[4,0.908,628.4,893.7,873.5,1134.6],[4,0.913,628.8,893.7,873.1,1135.6],[4,0.916,630.2,893.3,874.6,1134.2],[4,0.922,297.7,850.9,540.1,1098.7],[4,0.922,297,850.4,541,1098.8],[4,0.901,297.5,850.6,541.1,1099.1],[4,0.444,628.3,894.5,872.9,1134.2],[4,0.942,629.2,894.9,873,1134.6],[4,0.933,628.6,894.5,874,1134.1],[4,0.941,629.8,894.2,874.6,1133.3],[4,0.882,297.5,851,540.9,1098.7],[10,0.507,395.3,1036.5,778.1,1186.7],[10,0.867,396.3,1039,778,1185.7],[10,0.901,391.1,1040.8,777.8,1185.3],[4,0.913,628.7,896.1,873.8,1135.6],[4,0.906,628.3,896.1,873.8,1135.2],[4,0.525,629.5,896,874,1133.1],[10,0.841,394,1037.4,777.7,1185.6],[10,0.848,394.3,1039.1,776.3,1185.2],[10,0.876,390.3,1040.3,778.1,1185.2],[10,0.294,391.3,1041.6,777,1185.4],[10,0.83,394.9,1037.6,778.6,1185.8],[10,0.857,394.6,1038.7,776.9,1185.1],[10,0.898,389.7,1040,778.4,1185],[10,0.166,390.4,1041.8,776.5,1185.5],[6,0.513,581.1,242,967.9,694.2],[6,0.194,582.4,237.9,975.5,698],[6,0.92,580.3,237.9,974,693.5],[6,0.807,584.6,240.1,972,695],[6,0.697,585.2,239.8,976.6,694.5],[6,0.163,583.7,238.3,974.4,693.7]] };
+
+const $ = (id) => document.getElementById(id);
+const state = {
+  session: null, size: 640,
+  photo: null, photoName: '', candidates: [], isExample: true,
+  conf: 0.5, view: 'result', bom: structuredClone(DEFAULT_BOM), pending: null,
+};
+
+// ---------- Saved settings (this device only) ----------
+const STORE_KEY = 'enclosure-bom-checker';
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    if (saved?.bom?.items) state.bom = saved.bom;
+    if (saved?.conf) state.conf = saved.conf;
+  } catch { /* storage unavailable: defaults */ }
+}
+function saveSettings() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ bom: state.bom, conf: state.conf })); } catch { /* not kept */ }
+}
+
+// ---------- Status ----------
+function setStatus(kind, text) {
+  $('status').dataset.state = kind;
+  $('status-text').textContent = text;
+}
+function setBusy(text) {
+  $('busy').hidden = !text;
+  if (text) $('busy-text').textContent = text;
+}
+
+// ---------- Model ----------
+function concat(arrays) {
+  const out = new Uint8Array(arrays.reduce((s, a) => s + a.length, 0));
+  let offset = 0;
+  for (const a of arrays) { out.set(a, offset); offset += a.length; }
+  return out;
+}
+
+// Download files in parallel, reporting progress over all of them; resolves to their bytes in order
+async function download(files, onProgress) {
+  const total = files.reduce((s, [, bytes]) => s + bytes, 0);
+  let received = 0;
+  return Promise.all(files.map(async ([url]) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+    if (!res.body) return new Uint8Array(await res.arrayBuffer());
+    const reader = res.body.getReader();
+    const chunks = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      onProgress(Math.min(1, received / total));
+    }
+    return concat(chunks);
+  }));
+}
+
+async function loadModel() {
+  if (!window.ort) {
+    setStatus('error', 'Detection engine did not load');
+    return;
+  }
+  try {
+    const [engine, ...parts] = await download([ENGINE, ...MODEL_PARTS],
+      (f) => setStatus('loading', `Loading model ${Math.round(f * 100)}%`));
+    ort.env.wasm.wasmBinary = engine.buffer;
+    ort.env.wasm.numThreads = 1;  // threads need cross-origin isolation, which an artifact page doesn't have
+    setStatus('loading', 'Preparing model');
+    const session = await ort.InferenceSession.create(concat(parts), { executionProviders: ['wasm'] });
+    const blank = new Float32Array(3 * state.size * state.size);
+    await session.run({ [session.inputNames[0]]: new ort.Tensor('float32', blank, [1, 3, state.size, state.size]) });
+    state.session = session;
+    setStatus('ready', 'Model ready');
+    if (state.pending) {
+      const job = state.pending;
+      state.pending = null;
+      checkPhoto(job.canvas, job.name);
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus('error', 'Model failed to load');
+    $('photo-note').textContent = `The model could not be loaded (${err.message}). Reload the page to try again.`;
+    $('photo-note').classList.add('error');
+  }
+}
+
+// Scale the photo into a size x size square with grey (114) borders, like Ultralytics' LetterBox
+function letterbox(src, size) {
+  const r = Math.min(size / src.width, size / src.height);
+  const w = Math.round(src.width * r), h = Math.round(src.height * r);
+  const left = Math.round((size - w) / 2 - 0.1), top = Math.round((size - h) / 2 - 0.1);
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgb(114,114,114)';
+  g.fillRect(0, 0, size, size);
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(src, left, top, w, h);
+  return { canvas: c, r, left, top };
+}
+
+async function detect(src) {
+  const size = state.size;
+  const lb = letterbox(src, size);
+  const rgba = lb.canvas.getContext('2d').getImageData(0, 0, size, size).data;
+  const area = size * size;
+  const input = new Float32Array(3 * area);  // RGB planes, 0-1
+  for (let i = 0, p = 0; i < area; i++, p += 4) {
+    input[i] = rgba[p] / 255;
+    input[i + area] = rgba[p + 1] / 255;
+    input[i + 2 * area] = rgba[p + 2] / 255;
+  }
+  const session = state.session;
+  const results = await session.run({ [session.inputNames[0]]: new ort.Tensor('float32', input, [1, 3, size, size]) });
+  const out = results[session.outputNames[0]];
+  return decode(out.data, out.dims, lb);
+}
+
+// Model output: [1, 4 + classes, anchors] of box centre/size (input pixels) and class scores
+function decode(data, dims, lb) {
+  const nc = CLASSES.length;
+  const n = dims[2];
+  const at = (k, i) => data[k * n + i];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let best = 0, cls = -1;
+    for (let k = 0; k < nc; k++) {
+      const v = at(4 + k, i);
+      if (v > best) { best = v; cls = k; }
+    }
+    if (best < MIN_KEEP) continue;
+    const cx = at(0, i), cy = at(1, i), w = at(2, i), h = at(3, i);
+    out.push([cls, best,
+      (cx - w / 2 - lb.left) / lb.r, (cy - h / 2 - lb.top) / lb.r,
+      (cx + w / 2 - lb.left) / lb.r, (cy + h / 2 - lb.top) / lb.r]);
+  }
+  return out;
+}
+
+function iou(a, b) {
+  const ix = Math.max(0, Math.min(a[4], b[4]) - Math.max(a[2], b[2]));
+  const iy = Math.max(0, Math.min(a[5], b[5]) - Math.max(a[3], b[3]));
+  const inter = ix * iy;
+  const union = (a[4] - a[2]) * (a[5] - a[3]) + (b[4] - b[2]) * (b[5] - b[3]) - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+// Confidence filter, then per-class non-maximum suppression (Ultralytics' defaults)
+function detections() {
+  const sorted = state.candidates.filter((d) => d[1] > state.conf).sort((a, b) => b[1] - a[1]);
+  const keep = [];
+  for (const d of sorted) {
+    if (keep.length >= 300) break;
+    if (keep.every((k) => k[0] !== d[0] || iou(k, d) <= IOU)) keep.push(d);
+  }
+  const W = state.photo.width, H = state.photo.height;
+  return keep.map(([cls, conf, x1, y1, x2, y2]) => ({
+    name: CLASSES[cls] ?? String(cls), cls, conf,
+    box: [Math.max(0, x1), Math.max(0, y1), Math.min(W, x2), Math.min(H, y2)],
+  }));
+}
+
+// ---------- BOM comparison (same rules as inspection.py) ----------
+function compare(dets) {
+  const counts = {};
+  for (const d of dets) counts[d.name] = (counts[d.name] || 0) + 1;
+  const lines = Object.entries(state.bom.items).map(([name, qty]) => ({ name, expected: qty, detected: counts[name] || 0 }));
+  for (const [name, n] of Object.entries(counts)) if (!(name in state.bom.items)) lines.push({ name, expected: 0, detected: n });
+  for (const l of lines) l.status = l.detected < l.expected ? 'MISSING' : l.detected > l.expected ? 'EXTRA' : 'OK';
+  return lines;
+}
+
+// ---------- Rendering ----------
+function render() {
+  const liveStarting = live.running && !live.frame;
+  if (state.pending || $('busy').hidden === false || liveStarting) {
+    if (state.photo && !live.running) drawView([]);
+    $('verdict').dataset.pass = 'wait';
+    $('verdict-word').textContent = 'CHECKING';
+    $('verdict-sub').textContent = state.session || !(state.pending || liveStarting) ? 'Looking for parts' : 'Waiting for the model to load';
+    $('verdict-src').textContent = '';
+    $('rows').replaceChildren();
+    return;
+  }
+  if (!state.photo) return;
+  const dets = detections();
+  if (live.running) drawOverlay(dets);
+  else drawView(dets);
+  const lines = compare(dets);
+  const missing = lines.filter((l) => l.status === 'MISSING');
+  const extra = lines.filter((l) => l.status === 'EXTRA');
+  const pass = missing.length === 0;
+  const required = lines.reduce((s, l) => s + l.expected, 0);
+  const found = lines.reduce((s, l) => s + Math.min(l.detected, l.expected), 0);
+  const missingN = missing.reduce((s, l) => s + l.expected - l.detected, 0);
+  const extraN = extra.reduce((s, l) => s + l.detected - l.expected, 0);
+
+  $('verdict').dataset.pass = String(pass);
+  $('verdict-word').textContent = pass ? 'PASS' : 'FAIL';
+  $('verdict-sub').textContent = `${found} of ${required} parts found · ${missingN} missing · ${extraN} extra`;
+  $('verdict-src').textContent = `Against ${state.bom.name}, confidence ≥ ${Math.round(state.conf * 100)}%`;
+
+  const order = { MISSING: 0, EXTRA: 1, OK: 2 };
+  const shown = lines.filter((l) => l.expected || l.detected).sort((a, b) => order[a.status] - order[b.status]);
+  const tbody = $('rows');
+  tbody.replaceChildren(...shown.map((l) => {
+    const tr = document.createElement('tr');
+    const cls = CLASSES.indexOf(l.name);
+    const part = document.createElement('td');
+    part.className = 'part';
+    const sw = document.createElement('span');
+    sw.className = 'swatch';
+    sw.style.background = cls >= 0 ? COLORS[cls % COLORS.length] : 'transparent';
+    part.append(sw, l.name);
+    const num = document.createElement('td');
+    num.className = 'num';
+    num.textContent = `${l.detected} / ${l.expected}`;
+    const st = document.createElement('td');
+    const chip = document.createElement('span');
+    chip.className = `chip ${l.status}`;
+    chip.textContent = l.status;
+    st.append(chip);
+    tr.append(part, num, st);
+    return tr;
+  }));
+}
+
+function drawView(dets) {
+  const src = state.photo;
+  const canvas = $('view');
+  const scale = Math.min(1, 1600 / Math.max(src.width, src.height));
+  canvas.width = Math.round(src.width * scale);
+  canvas.height = Math.round(src.height * scale);
+  const g = canvas.getContext('2d');
+  g.drawImage(src, 0, 0, canvas.width, canvas.height);
+  if (state.view === 'result') drawBoxes(canvas, dets, scale);
+}
+
+// Boxes only, over the live video (the frame they came from is the one the video just showed)
+function drawOverlay(dets) {
+  const canvas = $('overlay');
+  canvas.width = state.photo.width;
+  canvas.height = state.photo.height;
+  drawBoxes(canvas, dets, 1);
+}
+
+function drawBoxes(canvas, dets, scale) {
+  const g = canvas.getContext('2d');
+  // Sizes in screen pixels, so labels stay readable whether the photo shows 340 or 700 px wide
+  const px = canvas.width / Math.max(1, canvas.getBoundingClientRect().width);
+  const fontSize = 11 * px, pad = 3 * px;
+  g.lineWidth = 2 * px;
+  g.font = `600 ${fontSize}px Barlow, Arial, sans-serif`;
+  g.textBaseline = 'top';
+  for (const d of dets) {
+    const [x1, y1, x2, y2] = d.box.map((v) => v * scale);
+    const color = COLORS[d.cls % COLORS.length];
+    g.strokeStyle = color;
+    g.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    const label = `${d.name} ${Math.round(d.conf * 100)}%`;
+    const th = fontSize + 2 * pad, tw = g.measureText(label).width + 2 * pad;
+    const ty = y1 - th >= 0 ? y1 - th : y1;
+    g.fillStyle = color;
+    g.fillRect(x1, ty, tw, th);
+    g.fillStyle = '#000';
+    g.fillText(label, x1 + pad, ty + pad);
+  }
+}
+
+function renderBomEditor() {
+  $('bom-name').textContent = state.bom.name;
+  const names = [...Object.keys(state.bom.items), ...CLASSES.filter((c) => !(c in state.bom.items))];
+  $('bom-list').replaceChildren(...names.map((name) => {
+    const li = document.createElement('li');
+    const label = document.createElement('span');
+    label.className = 'name';
+    label.textContent = name;
+    if (!CLASSES.includes(name)) {
+      const warn = document.createElement('small');
+      warn.textContent = 'The model does not know this part, so it always shows as missing';
+      label.append(warn);
+    }
+    const stepper = document.createElement('span');
+    stepper.className = 'stepper';
+    const minus = document.createElement('button');
+    minus.type = 'button'; minus.textContent = '−'; minus.setAttribute('aria-label', `One fewer ${name}`);
+    const qty = document.createElement('span');
+    qty.textContent = state.bom.items[name] ?? 0;
+    const plus = document.createElement('button');
+    plus.type = 'button'; plus.textContent = '+'; plus.setAttribute('aria-label', `One more ${name}`);
+    const change = (delta) => {
+      const next = Math.max(0, (state.bom.items[name] ?? 0) + delta);
+      state.bom.items[name] = next;
+      if (!state.bom.name.endsWith('(edited)')) state.bom.name += ' (edited)';
+      qty.textContent = next;
+      $('bom-name').textContent = state.bom.name;
+      saveSettings();
+      render();
+    };
+    minus.onclick = () => change(-1);
+    plus.onclick = () => change(1);
+    stepper.append(minus, qty, plus);
+    li.append(label, stepper);
+    return li;
+  }));
+}
+
+// ---------- Photos ----------
+// The load event, not img.decode(): decode() can wait indefinitely while the page is in the background
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('the image could not be decoded'));
+    img.src = src;
+  });
+}
+
+async function readPhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImage(url);
+    const s = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * s);
+    c.height = Math.round(img.naturalHeight * s);
+    const g = c.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, c.width, c.height);
+    return c;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function checkPhoto(canvas, name) {
+  state.photo = canvas;
+  state.photoName = name;
+  state.isExample = false;
+  state.candidates = [];
+  $('photo-name').textContent = name;
+  $('photo-note').classList.remove('error');
+  if (!state.session) {
+    state.pending = { canvas, name };
+    setBusy('Waiting for the model');
+    render();
+    $('photo-note').textContent = 'The photo will be checked as soon as the model has loaded.';
+    return;
+  }
+  setBusy('Checking');
+  render();
+  $('photo-note').textContent = '';
+  try {
+    await new Promise((r) => setTimeout(r, 30));  // let the overlay paint before the model blocks the page
+    const t0 = performance.now();
+    state.candidates = await detect(canvas);
+    $('photo-note').textContent = `Checked in ${((performance.now() - t0) / 1000).toFixed(1)} s.`;
+  } catch (err) {
+    console.error(err);
+    $('photo-note').textContent = `This photo could not be checked (${err.message}).`;
+    $('photo-note').classList.add('error');
+  } finally {
+    setBusy('');
+    render();
+  }
+}
+
+async function onPhotoChosen(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';  // choosing the same file again still triggers a check
+  if (!file) return;
+  try {
+    checkPhoto(await readPhoto(file), file.name || 'Photo');
+  } catch (err) {
+    $('photo-note').textContent = `This file could not be opened as a photo (${err.message}).`;
+    $('photo-note').classList.add('error');
+  }
+}
+
+// ---------- BOM from Excel ----------
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('the Excel reader did not load'));
+    document.head.append(s);
+  });
+}
+
+async function onBomChosen(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  const msg = $('bom-msg');
+  msg.classList.remove('error');
+  try {
+    if (!window.XLSX) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: null, blankrows: true });
+    const items = {};
+    rows.forEach((raw, idx) => {
+      const row = {};
+      for (const k in raw) row[String(k).trim()] = raw[k];
+      if (!('Object Name' in row) || !('Quantity' in row)) {
+        throw new Error(`the sheet needs the columns "Object Name" and "Quantity" (found: ${Object.keys(row).join(', ')})`);
+      }
+      const name = row['Object Name'] == null ? '' : String(row['Object Name']).trim();
+      if (!name) return;
+      const qty = Number(row.Quantity);
+      if (row.Quantity === null || !Number.isInteger(qty) || qty < 0) {
+        throw new Error(`row ${idx + 2}: invalid quantity ${JSON.stringify(row.Quantity)} for ${name}`);
+      }
+      items[name] = (items[name] || 0) + qty;
+    });
+    if (!Object.keys(items).length) throw new Error('no parts found in the first sheet');
+    state.bom = { name: file.name, items };
+    saveSettings();
+    renderBomEditor();
+    render();
+    const unknown = Object.keys(items).filter((n) => !CLASSES.includes(n));
+    msg.textContent = `Loaded ${Object.keys(items).length} parts from ${file.name}.` +
+      (unknown.length ? ` Not known to the model: ${unknown.join(', ')}.` : '');
+  } catch (err) {
+    msg.textContent = `Could not read this BOM: ${err.message}.`;
+    msg.classList.add('error');
+  }
+}
+
+// ---------- Live camera ----------
+// Works where the page is its own site over HTTPS. Inside the claude.ai viewer the camera is blocked,
+// so there the button stays hidden and LIVE_SITE (the hosted copy, once it exists) is linked instead.
+const LIVE_SITE = 'https://taimonfiuza.github.io/Enclosure_BOM_Checker/';
+const live = { running: false, stream: null, frame: null, rate: 0, wakeLock: null, before: null };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function liveAvailable() {
+  return window.isSecureContext && !!navigator.mediaDevices?.getUserMedia && window.self === window.top;
+}
+
+function setLiveUi(on) {
+  for (const el of document.querySelectorAll('.actions label')) el.hidden = on;
+  $('live-start').hidden = on || !liveAvailable();
+  $('live-freeze').hidden = !on;
+  $('live-stop').hidden = !on;
+  $('live').hidden = !on;
+  $('overlay').hidden = !on;
+  $('view').hidden = on;
+  document.querySelector('.seg').hidden = on;
+}
+
+async function startLive() {
+  const note = $('photo-note');
+  note.classList.remove('error');
+  try {
+    live.stream = await navigator.mediaDevices.getUserMedia({
+      audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 1280 } },
+    });
+  } catch (err) {
+    note.textContent = err.name === 'NotAllowedError'
+      ? 'Camera access was refused. Allow the camera for this site (on iPhone: aA in the address bar > Website Settings > Camera) and try again.'
+      : `The camera could not be started (${err.message}).`;
+    note.classList.add('error');
+    return;
+  }
+  live.before = { photo: state.photo, name: state.photoName, candidates: state.candidates, isExample: state.isExample };
+  const video = $('live');
+  video.srcObject = live.stream;
+  live.running = true;
+  live.frame = null;
+  live.rate = 0;
+  setLiveUi(true);
+  $('photo-name').textContent = 'Live camera';
+  note.textContent = 'Hold the phone steady over the enclosure. Freeze result keeps what is on screen.';
+  render();
+  try { await video.play(); } catch { /* muted inline video plays without a tap on iPhone */ }
+  try { live.wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* the screen may dim */ }
+  liveLoop();
+}
+
+function grabFrame(video) {
+  const s = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.round(video.videoWidth * s);
+  c.height = Math.round(video.videoHeight * s);
+  c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+  return c;
+}
+
+// One check after another, as fast as the phone manages; the newest result replaces the last
+async function liveLoop() {
+  const video = $('live');
+  let last = performance.now();
+  while (live.running) {
+    if (!state.session || video.readyState < 2 || !video.videoWidth) {
+      render();
+      await sleep(250);
+      continue;
+    }
+    const frame = grabFrame(video);
+    let candidates;
+    try {
+      candidates = await detect(frame);
+    } catch (err) {
+      console.error(err);
+      await sleep(500);
+      continue;
+    }
+    if (!live.running) break;  // stopped or frozen while this frame was being checked
+    live.frame = frame;
+    state.photo = frame;
+    state.candidates = candidates;
+    const now = performance.now();
+    live.rate = live.rate ? live.rate * 0.7 + 300 / (now - last) : 1000 / (now - last);
+    last = now;
+    $('photo-name').textContent = `Live camera · ${live.rate.toFixed(1)} checks/s`;
+    render();
+    await sleep(0);  // let taps and the video repaint between checks
+  }
+}
+
+function stopLive(freeze) {
+  if (!live.running) return;
+  live.running = false;
+  live.stream?.getTracks().forEach((t) => t.stop());
+  live.stream = null;
+  $('live').srcObject = null;
+  live.wakeLock?.release().catch(() => {});
+  live.wakeLock = null;
+  setLiveUi(false);
+  if (freeze && live.frame) {
+    state.photoName = `Live frame, ${new Date().toLocaleTimeString()}`;
+    state.isExample = false;
+    $('photo-note').textContent = 'Frozen from the live camera.';
+  } else {
+    Object.assign(state, { photo: live.before.photo, photoName: live.before.name,
+      candidates: live.before.candidates, isExample: live.before.isExample });
+    $('photo-note').textContent = '';
+  }
+  live.frame = null;
+  $('photo-name').textContent = state.photoName;
+  render();
+}
+
+// ---------- Start ----------
+function setView(view) {
+  state.view = view;
+  $('show-result').setAttribute('aria-pressed', String(view === 'result'));
+  $('show-original').setAttribute('aria-pressed', String(view !== 'result'));
+  render();
+}
+
+async function showExample() {
+  let img;
+  try {
+    img = await loadImage(EXAMPLE.src);
+  } catch {
+    return;  // no example image: the page still works for new photos
+  }
+  if (!state.isExample) return;  // a photo was chosen while the example loaded
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  c.getContext('2d').drawImage(img, 0, 0);
+  state.photo = c;
+  state.photoName = EXAMPLE.name;
+  state.candidates = EXAMPLE.candidates;
+  $('photo-name').textContent = EXAMPLE.name;
+  render();
+}
+
+loadSettings();
+$('conf').value = Math.round(state.conf * 100);
+$('conf-out').textContent = `${Math.round(state.conf * 100)}%`;
+$('conf').addEventListener('input', (e) => {
+  state.conf = Number(e.target.value) / 100;
+  $('conf-out').textContent = `${e.target.value}%`;
+  saveSettings();
+  render();
+});
+$('camera').addEventListener('change', onPhotoChosen);
+$('library').addEventListener('change', onPhotoChosen);
+$('bom-file').addEventListener('change', onBomChosen);
+$('bom-reset').addEventListener('click', () => {
+  state.bom = structuredClone(DEFAULT_BOM);
+  $('bom-msg').classList.remove('error');
+  $('bom-msg').textContent = 'Back to object_list.xlsx.';
+  saveSettings();
+  renderBomEditor();
+  render();
+});
+let resizeTimer;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
+$('show-result').addEventListener('click', () => setView('result'));
+$('show-original').addEventListener('click', () => setView('original'));
+$('live-start').addEventListener('click', startLive);
+$('live-freeze').addEventListener('click', () => stopLive(true));
+$('live-stop').addEventListener('click', () => stopLive(false));
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopLive(true); });
+$('live-start').hidden = !liveAvailable();
+if (!liveAvailable() && LIVE_SITE) {
+  $('live-link').href = LIVE_SITE;
+  $('live-link').textContent = LIVE_SITE;
+  $('live-elsewhere').hidden = false;
+}
+renderBomEditor();
+showExample();
+loadModel();
+</script>
+</body></html>
